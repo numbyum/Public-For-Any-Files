@@ -24,23 +24,32 @@ Luna-AI/
 ├── package.json
 ├── .env.example
 ├── .gitignore
+├── .dockerignore
+├── Dockerfile
 ├── src/
 │   ├── index.js              (main entry point)
 │   ├── utils/
 │   │   ├── math.js           (smooth math and easing helpers)
-│   │   └── Config.js         (centralized configuration)
+│   │   ├── Config.js         (centralized configuration)
+│   │   └── Safety.js         (dangerous block detection)
 │   ├── brain/
 │   │   ├── Brain.js          (decision making and goals)
 │   │   ├── Personality.js    (Luna's identity and chat style)
 │   │   ├── Goals.js          (goal definitions and transitions)
-│   │   └── ChatModule.js     (chat message queue and handling)
+│   │   ├── ChatModule.js     (chat message queue and handling)
+│   │   ├── BehaviorPlanner.js(state machine for behaviors)
+│   │   ├── InterestSystem.js (dynamic focus/interests)
+│   │   └── Scheduler.js      (timed actions)
 │   ├── memory/
 │   │   └── Memory.js         (persistent JSON memory)
 │   ├── perception/
-│   │   └── Perception.js     (world, players, entities, chat)
-│   └── movement/
-│       ├── Movement.js       (smooth walking and wandering)
-│       └── LookController.js (smooth camera / look control)
+│   │   ├── Perception.js     (world, players, entities, chat)
+│   │   └── WorldScanner.js   (blocks, biome, time)
+│   ├── movement/
+│   │   ├── Movement.js       (smooth walking and wandering)
+│   │   └── LookController.js (smooth camera / look control)
+│   └── commands/
+│       └── CommandRegistry.js(extensible slash commands)
 └── data/
     └── memory.json           (auto-created on first run)
 ```
@@ -213,14 +222,20 @@ Memory is stored locally in `data/memory.json`. Later, this can be upgraded to S
 - `src/index.js` - Starts the bot, connects, reconnects, runs the main loop.
 - `src/utils/Config.js` - Reads `.env` and provides typed configuration.
 - `src/utils/math.js` - Smooth interpolation and random helpers.
+- `src/utils/Safety.js` - Detects dangerous blocks like lava and fire.
 - `src/brain/Brain.js` - Decides what Luna should do right now.
 - `src/brain/Goals.js` - Defines possible goals like wander, observe, greet, follow.
+- `src/brain/BehaviorPlanner.js` - State machine managing behavior transitions.
+- `src/brain/InterestSystem.js` - Tracks Luna's interests and focus.
 - `src/brain/Personality.js` - Luna's identity, chat style, and responses.
 - `src/brain/ChatModule.js` - Queues and sends chat messages with delays.
+- `src/brain/Scheduler.js` - Runs timed and repeating tasks.
 - `src/memory/Memory.js` - Loads and saves player and event data.
 - `src/perception/Perception.js` - Detects nearby players, entities, and chat.
+- `src/perception/WorldScanner.js` - Scans nearby blocks, biome, and time.
 - `src/movement/Movement.js` - Controls walking, sprinting, pausing, and following with natural timing.
 - `src/movement/LookController.js` - Controls camera smoothly with overshoot, idle movements, and variable turn speed.
+- `src/commands/CommandRegistry.js` - Registry for extensible slash commands.
 
 ## Upgrading later
 
@@ -231,6 +246,47 @@ The code is modular. You can later add:
 - Crafting and inventory management
 - SQLite or web-based memory backend
 - Custom Minefort-specific features
+
+## Running with Docker
+
+You can run Luna inside a Docker container.
+
+### 1. Build the image
+
+```
+docker build -t luna-ai .
+```
+
+### 2. Run the container
+
+```
+docker run --rm luna-ai
+```
+
+### 3. Pass environment variables
+
+```
+docker run --rm \
+  -e MINECRAFT_HOST=your-server-host \
+  -e MINECRAFT_PORT=25565 \
+  -e MINECRAFT_USERNAME=Luna \
+  -e MINECRAFT_AUTH=offline \
+  luna-ai
+```
+
+### 4. Keep memory between runs
+
+Mount a local folder to `/app/data`:
+
+```
+docker run --rm \
+  -v ./luna-data:/app/data \
+  -e MINECRAFT_HOST=your-server-host \
+  -e MINECRAFT_PORT=25565 \
+  -e MINECRAFT_USERNAME=Luna \
+  -e MINECRAFT_AUTH=offline \
+  luna-ai
+```
 
 ## Version
 
