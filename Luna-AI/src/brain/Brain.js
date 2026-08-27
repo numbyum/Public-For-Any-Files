@@ -5,6 +5,7 @@ const InterestSystem = require('./InterestSystem');
 const Memory = require('../memory/Memory');
 const ChatModule = require('./ChatModule');
 const WorldScanner = require('../perception/WorldScanner');
+const Scheduler = require('./Scheduler');
 
 class Brain {
   constructor(bot, perception, movement, lookController, config) {
@@ -17,11 +18,10 @@ class Brain {
     this.interests = new InterestSystem();
     this.chatModule = new ChatModule(bot, config);
     this.worldScanner = new WorldScanner(bot);
+    this.scheduler = new Scheduler();
     this.followTarget = null;
     this.lastGoalChange = Date.now();
     this.goalInterval = 5000;
-    this.lastSpontaneousCheck = 0;
-    this.spontaneousCheckInterval = 10000;
     this.idleLookTimer = 0;
     this.idleLookInterval = randomRange(2000, 6000);
     this.lastWorldScan = 0;
@@ -31,9 +31,9 @@ class Brain {
     this.perception.update();
     this.chatModule.process();
     this.interests.update(0.05);
+    this.scheduler.update();
     this.evaluateGoal();
     this.executeGoal();
-    this.maybeSpontaneous();
     this.scanWorld();
   }
 
@@ -305,6 +305,18 @@ class Brain {
     this.chatModule.maybeSpontaneousComment();
   }
 
+  setupSchedules() {
+    this.scheduler.addInterval(45000, () => {
+      this.chatModule.maybeSpontaneousComment();
+    });
+    this.scheduler.addInterval(30000, () => {
+      this.interests.decay('blocks', 0.05);
+      this.interests.decay('entities', 0.05);
+      this.interests.decay('structures', 0.05);
+      this.interests.decay('biomes', 0.05);
+    });
+  }
+
   getStatus() {
     return {
       state: this.planner.getState(),
@@ -314,6 +326,7 @@ class Brain {
       chatBusy: this.chatModule.isBusy(),
       lastGoalChange: this.lastGoalChange,
       stateAge: this.planner.getStateAge(),
+      scheduledTasks: this.scheduler.getPendingCount(),
     };
   }
 }

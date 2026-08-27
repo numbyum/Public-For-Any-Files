@@ -49,6 +49,9 @@ function createModules() {
   perception = new Perception(bot);
   movement = new Movement(bot);
   brain = new Brain(bot, perception, movement, lookController, config);
+  if (brain.setupSchedules) {
+    brain.setupSchedules();
+  }
 }
 
 function yawPitchToVec3(yaw, pitch, origin, distance) {
