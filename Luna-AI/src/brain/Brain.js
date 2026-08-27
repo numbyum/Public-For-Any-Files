@@ -1,7 +1,10 @@
 const Personality = require('./Personality');
 const { Goals, getWeightedGoal, shouldPickNewGoal } = require('./Goals');
+const { BehaviorPlanner, States } = require('./BehaviorPlanner');
+const InterestSystem = require('./InterestSystem');
 const Memory = require('../memory/Memory');
 const ChatModule = require('./ChatModule');
+const WorldScanner = require('../perception/WorldScanner');
 
 class Brain {
   constructor(bot, perception, movement, lookController, config) {
@@ -10,23 +13,43 @@ class Brain {
     this.movement = movement;
     this.lookController = lookController;
     this.config = config;
-    this.currentGoal = Goals.IDLE;
+    this.planner = new BehaviorPlanner();
+    this.interests = new InterestSystem();
+    this.chatModule = new ChatModule(bot, config);
+    this.worldScanner = new WorldScanner(bot);
     this.followTarget = null;
     this.lastGoalChange = Date.now();
     this.goalInterval = 5000;
-    this.chatModule = new ChatModule(bot, config);
     this.lastSpontaneousCheck = 0;
     this.spontaneousCheckInterval = 10000;
     this.idleLookTimer = 0;
     this.idleLookInterval = randomRange(2000, 6000);
+    this.lastWorldScan = 0;
   }
 
   update() {
     this.perception.update();
     this.chatModule.process();
+    this.interests.update(0.05);
     this.evaluateGoal();
     this.executeGoal();
     this.maybeSpontaneous();
+    this.scanWorld();
+  }
+
+  scanWorld() {
+    const now = Date.now();
+    if (now - this.lastWorldScan < 2000) return;
+    this.lastWorldScan = now;
+    const world = this.worldScanner.scan();
+    if (world && world.interestingBlocks.length > 0) {
+      const block = world.interestingBlocks[0];
+      if (Math.random() < 0.1 && this.planner.getState() === States.WANDERING) {
+        this.planner.transition(States.OBSERVING, 'interesting block');
+        const moveTarget = { x: block.x, y: block.y, z: block.z };
+        this.movement.setTarget(moveTarget);
+      }
+    }
   }
 
   evaluateGoal() {
@@ -36,46 +59,73 @@ class Brain {
     const nearbyPlayers = this.perception.nearbyPlayers;
     const hasRecentChat = this.perception.hasRecentChat();
 
-    if (shouldPickNewGoal(this.currentGoal, nearbyPlayers, hasRecentChat)) {
+    if (nearbyPlayers.length > 0) {
+      this.interests.boost('players', 0.1);
+    }
+
+    if (shouldPickNewGoal(this.planner.getState(), nearbyPlayers, hasRecentChat)) {
       this.lastGoalChange = now;
-      this.currentGoal = getWeightedGoal();
-      this.goalInterval = randomRange(4000, 12000);
-      this.followTarget = null;
-      this.movement.stopFollowing();
-      if (this.currentGoal === Goals.WANDER) {
-        this.movement.pickWanderTarget();
-      }
+      const goal = getWeightedGoal();
+      this.mapGoalToState(goal);
     }
   }
 
-  executeGoal() {
-    const nearbyPlayers = this.perception.nearbyPlayers;
-
-    switch (this.currentGoal) {
+  mapGoalToState(goal) {
+    switch (goal) {
       case Goals.IDLE:
-        this.executeIdle();
+        this.planner.transition(States.IDLE, 'goal');
         break;
       case Goals.WANDER:
-        this.executeWander();
+        this.planner.transition(States.WANDERING, 'goal');
+        this.movement.pickWanderTarget();
         break;
       case Goals.OBSERVE:
-        this.executeObserve();
+        this.planner.transition(States.OBSERVING, 'goal');
         break;
       case Goals.EXPLORE:
+        this.planner.transition(States.EXPLORING, 'goal');
+        break;
+      default:
+        this.planner.transition(States.WANDERING, 'goal');
+        this.movement.pickWanderTarget();
+    }
+    this.goalInterval = randomRange(4000, 12000);
+    this.followTarget = null;
+    this.movement.stopFollowing();
+  }
+
+  executeGoal() {
+    const state = this.planner.getState();
+    const nearbyPlayers = this.perception.nearbyPlayers;
+
+    switch (state) {
+      case States.IDLE:
+        this.executeIdle();
+        break;
+      case States.WANDERING:
+        this.executeWander();
+        break;
+      case States.OBSERVING:
+        this.executeObserve();
+        break;
+      case States.EXPLORING:
         this.executeExplore();
         break;
-      case Goals.GREET:
+      case States.GREETING:
         this.executeGreet();
         break;
-      case Goals.FOLLOW:
+      case States.FOLLOWING:
         this.executeFollow();
         break;
-      case Goals.RESPOND:
+      case States.RESPONDING:
         this.executeRespond();
+        break;
+      case States.INVESTIGATING:
+        this.executeInvestigate();
         break;
     }
 
-    if (nearbyPlayers.length > 0 && this.currentGoal !== Goals.FOLLOW && this.currentGoal !== Goals.GREET) {
+    if (nearbyPlayers.length > 0 && state !== States.FOLLOWING && state !== States.GREETING) {
       const closest = nearbyPlayers[0];
       if (closest.distance < 8 && Math.random() < 0.015) {
         this.lookController.lookAtEntity(closest.entity);
@@ -139,9 +189,8 @@ class Brain {
     if (!this.movement.targetPosition || this.movement.isNearTarget(this.movement.targetPosition, 2)) {
       this.movement.stop();
       if (Math.random() < 0.5) {
-        this.currentGoal = getWeightedGoal();
-        this.lastGoalChange = Date.now();
-        this.goalInterval = randomRange(4000, 12000);
+        const goal = getWeightedGoal();
+        this.mapGoalToState(goal);
       }
     } else {
       this.movement.wander();
@@ -154,10 +203,28 @@ class Brain {
     }
   }
 
+  executeInvestigate() {
+    const world = this.worldScanner.scan();
+    if (world && world.interestingBlocks.length > 0) {
+      const block = world.interestingBlocks[0];
+      this.lookController.lookAtEntity({ position: { x: block.x, y: block.y, z: block.z } });
+      if (block.distance > 3) {
+        this.movement.setTarget({ x: block.x, y: block.y, z: block.z });
+      } else {
+        this.movement.stop();
+        if (Math.random() < 0.3) {
+          this.planner.transition(States.OBSERVING, 'investigated');
+        }
+      }
+    } else {
+      this.planner.transition(States.WANDERING, 'nothing to investigate');
+    }
+  }
+
   executeGreet() {
     const player = this.perception.getPlayer(this.followTarget);
     if (!player) {
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'player gone');
       this.followTarget = null;
       return;
     }
@@ -176,20 +243,20 @@ class Brain {
       }
     }
     if (Math.random() < 0.08) {
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'greeting done');
       this.followTarget = null;
     }
   }
 
   executeFollow() {
     if (!this.followTarget) {
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'no target');
       return;
     }
     const player = this.perception.getPlayer(this.followTarget);
     if (!player) {
       this.movement.stopFollowing();
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'player gone');
       this.followTarget = null;
       return;
     }
@@ -200,7 +267,7 @@ class Brain {
   executeRespond() {
     this.movement.stop();
     if (this.chatModule.queue.length === 0) {
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'done responding');
       this.followTarget = null;
     }
   }
@@ -208,24 +275,24 @@ class Brain {
   handleChat(text, sender = null) {
     const result = this.chatModule.handleIncoming(text, sender);
     if (result.action === 'greet') {
-      this.currentGoal = Goals.GREET;
+      this.planner.transition(States.GREETING, 'chat greet');
       this.followTarget = result.target;
       this.lastGoalChange = Date.now();
       this.goalInterval = randomRange(5000, 15000);
     } else if (result.action === 'follow') {
-      this.currentGoal = Goals.FOLLOW;
+      this.planner.transition(States.FOLLOWING, 'chat follow');
       this.followTarget = result.target;
       this.lastGoalChange = Date.now();
       this.goalInterval = 60000;
     } else if (result.action === 'stop') {
       this.movement.stopFollowing();
       this.movement.stop();
-      this.currentGoal = Goals.IDLE;
+      this.planner.transition(States.IDLE, 'chat stop');
       this.followTarget = null;
       this.lastGoalChange = Date.now();
       this.chatModule.enqueue('Okay, stopping.', sender);
     } else if (result.action === 'respond') {
-      this.currentGoal = Goals.RESPOND;
+      this.planner.transition(States.RESPONDING, 'chat respond');
       this.lastGoalChange = Date.now();
       this.goalInterval = randomRange(2000, 5000);
     }
@@ -240,11 +307,13 @@ class Brain {
 
   getStatus() {
     return {
-      currentGoal: this.currentGoal,
+      state: this.planner.getState(),
+      previousState: this.planner.getPreviousState(),
       followTarget: this.followTarget,
       chatQueueLength: this.chatModule.getQueueLength(),
       chatBusy: this.chatModule.isBusy(),
       lastGoalChange: this.lastGoalChange,
+      stateAge: this.planner.getStateAge(),
     };
   }
 }
