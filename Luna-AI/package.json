@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node src/index.js"
+    "dev": "node src/index.js",
+    "postinstall": "node -e \"const fs=require('fs');const p=require('path');const d=p.join(__dirname,'data');if(!fs.existsSync(d))fs.mkdirSync(d);const f=p.join(d,'memory.json');if(!fs.existsSync(f))fs.writeFileSync(f,JSON.stringify({players:{},events:[],places:[],lastUpdated:0},null,2))\""
   },
   "keywords": [
     "minecraft",

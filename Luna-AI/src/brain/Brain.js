@@ -1,30 +1,32 @@
 const Personality = require('./Personality');
-const { Goals, getWeightedGoal, shouldPickNewGoal, getGoalForChatCommand } = require('./Goals');
+const { Goals, getWeightedGoal, shouldPickNewGoal } = require('./Goals');
 const Memory = require('../memory/Memory');
+const ChatModule = require('./ChatModule');
 
 class Brain {
-  constructor(bot, perception, movement, lookController) {
+  constructor(bot, perception, movement, lookController, config) {
     this.bot = bot;
     this.perception = perception;
     this.movement = movement;
     this.lookController = lookController;
+    this.config = config;
     this.currentGoal = Goals.IDLE;
     this.followTarget = null;
     this.lastGoalChange = Date.now();
     this.goalInterval = 5000;
-    this.chatQueue = [];
-    this.isProcessingChat = false;
-    this.lastChatProcess = 0;
-    this.chatProcessCooldown = 1000;
-    this.lastSpontaneousComment = 0;
-    this.spontaneousCommentInterval = 30000;
+    this.chatModule = new ChatModule(bot, config);
+    this.lastSpontaneousCheck = 0;
+    this.spontaneousCheckInterval = 10000;
+    this.idleLookTimer = 0;
+    this.idleLookInterval = randomRange(2000, 6000);
   }
 
   update() {
     this.perception.update();
-    this.processChatQueue();
+    this.chatModule.process();
     this.evaluateGoal();
     this.executeGoal();
+    this.maybeSpontaneous();
   }
 
   evaluateGoal() {
@@ -37,7 +39,7 @@ class Brain {
     if (shouldPickNewGoal(this.currentGoal, nearbyPlayers, hasRecentChat)) {
       this.lastGoalChange = now;
       this.currentGoal = getWeightedGoal();
-      this.goalInterval = randomRange(4000, 10000);
+      this.goalInterval = randomRange(4000, 12000);
       this.followTarget = null;
       this.movement.stopFollowing();
       if (this.currentGoal === Goals.WANDER) {
@@ -75,7 +77,7 @@ class Brain {
 
     if (nearbyPlayers.length > 0 && this.currentGoal !== Goals.FOLLOW && this.currentGoal !== Goals.GREET) {
       const closest = nearbyPlayers[0];
-      if (closest.distance < 8 && Math.random() < 0.02) {
+      if (closest.distance < 8 && Math.random() < 0.015) {
         this.lookController.lookAtEntity(closest.entity);
       }
     }
@@ -83,23 +85,28 @@ class Brain {
 
   executeIdle() {
     this.movement.stop();
-    if (Math.random() < 0.3) {
-      this.lookController.lookAt(
-        this.lookController.currentYaw + randomRange(-60, 60),
-        randomRange(-20, 20)
-      );
+    this.idleLookTimer += 50;
+    if (this.idleLookTimer > this.idleLookInterval) {
+      this.idleLookTimer = 0;
+      this.idleLookInterval = randomRange(2000, 6000);
+      if (Math.random() < 0.6) {
+        this.lookController.lookAt(
+          this.lookController.currentYaw + randomRange(-50, 50),
+          randomRange(-15, 15)
+        );
+      }
     }
   }
 
   executeWander() {
     this.movement.wander();
-    if (Math.random() < 0.1) {
+    if (Math.random() < 0.08) {
       this.lookController.lookAt(
-        this.lookController.currentYaw + randomRange(-90, 90),
-        randomRange(-30, 30)
+        this.lookController.currentYaw + randomRange(-70, 70),
+        randomRange(-25, 25)
       );
     }
-    if (Math.random() < 0.05 && this.perception.nearbyPlayers.length > 0) {
+    if (Math.random() < 0.04 && this.perception.nearbyPlayers.length > 0) {
       const player = this.perception.nearbyPlayers[0];
       this.lookController.lookAtEntity(player.entity);
     }
@@ -110,7 +117,7 @@ class Brain {
     if (this.perception.nearbyPlayers.length > 0) {
       const player = this.perception.nearbyPlayers[0];
       this.lookController.lookAtEntity(player.entity);
-      if (Math.random() < 0.3 && player.distance > 5) {
+      if (Math.random() < 0.25 && player.distance > 5) {
         const moveTarget = {
           x: player.position.x + randomRange(-2, 2),
           y: player.position.y,
@@ -119,10 +126,10 @@ class Brain {
         this.movement.setTarget(moveTarget);
       }
     } else {
-      if (Math.random() < 0.5) {
+      if (Math.random() < 0.4) {
         this.lookController.lookAt(
-          this.lookController.currentYaw + randomRange(-120, 120),
-          randomRange(-30, 30)
+          this.lookController.currentYaw + randomRange(-100, 100),
+          randomRange(-25, 25)
         );
       }
     }
@@ -134,15 +141,15 @@ class Brain {
       if (Math.random() < 0.5) {
         this.currentGoal = getWeightedGoal();
         this.lastGoalChange = Date.now();
-        this.goalInterval = randomRange(4000, 10000);
+        this.goalInterval = randomRange(4000, 12000);
       }
     } else {
       this.movement.wander();
     }
-    if (Math.random() < 0.15) {
+    if (Math.random() < 0.12) {
       this.lookController.lookAt(
-        this.lookController.currentYaw + randomRange(-90, 90),
-        randomRange(-25, 25)
+        this.lookController.currentYaw + randomRange(-80, 80),
+        randomRange(-20, 20)
       );
     }
   }
@@ -164,11 +171,11 @@ class Brain {
       this.movement.setTarget(moveTarget);
     } else {
       this.movement.stop();
-      if (Math.random() < 0.3 && !this.chatQueue.some((c) => c.text.includes('Hi') || c.text.includes('Hey'))) {
-        this.queueChat(Personality.getGreeting(), player.name);
+      if (Math.random() < 0.25 && !this.chatModule.queue.some((c) => c.text.includes('Hi') || c.text.includes('Hey'))) {
+        this.chatModule.enqueue(Personality.getGreeting(), player.name);
       }
     }
-    if (Math.random() < 0.1) {
+    if (Math.random() < 0.08) {
       this.currentGoal = Goals.IDLE;
       this.followTarget = null;
     }
@@ -192,123 +199,51 @@ class Brain {
 
   executeRespond() {
     this.movement.stop();
-    if (this.chatQueue.length > 0 && !this.isProcessingChat) {
-      const chat = this.chatQueue.shift();
-      this.isProcessingChat = true;
-      this.lastChatProcess = Date.now();
-      if (chat.text && chat.text.trim()) {
-        this.bot.chat(chat.text);
-      }
-      setTimeout(() => {
-        this.isProcessingChat = false;
-      }, this.chatProcessCooldown);
-    }
-    if (this.chatQueue.length === 0 && !this.isProcessingChat) {
+    if (this.chatModule.queue.length === 0) {
       this.currentGoal = Goals.IDLE;
       this.followTarget = null;
     }
   }
 
-  processChatQueue() {
-    if (this.chatQueue.length === 0 || this.isProcessingChat) return;
-    if (Date.now() - this.lastChatProcess < this.chatProcessCooldown) return;
-
-    const chat = this.chatQueue.shift();
-    this.isProcessingChat = true;
-    this.lastChatProcess = Date.now();
-
-    if (chat.text && chat.text.trim()) {
-      try {
-        this.bot.chat(chat.text);
-      } catch (e) {
-        console.error('[CHAT] Failed to send message:', e.message);
-      }
-    }
-
-    setTimeout(() => {
-      this.isProcessingChat = false;
-    }, this.chatProcessCooldown);
-  }
-
   handleChat(text, sender = null) {
-    const lower = text.toLowerCase();
-
-    this.perception.addChatMessage(text, sender);
-
-    if (sender) {
-      Memory.rememberPlayer(sender, {
-        notes: ['Sent chat message'],
-        description: `Known as "${sender}"`,
-      });
-    }
-
-    if (lower.includes('hi luna') || lower.includes('hello luna') || lower.includes('hey luna')) {
-      if (Personality.shouldGreet()) {
-        this.queueChat(Personality.getGreeting(), sender);
-        this.currentGoal = Goals.GREET;
-        this.followTarget = sender;
-        this.lastGoalChange = Date.now();
-        this.goalInterval = randomRange(5000, 15000);
-      }
-      return;
-    }
-
-    if (lower.includes('what is your name') || lower.includes('your name') || lower.includes('who are you')) {
-      this.queueChat(Personality.getResponse('name'), sender);
-      return;
-    }
-
-    if (lower.includes('follow me') || lower.includes('come here') || lower.includes('follow')) {
-      if (sender) {
-        this.currentGoal = Goals.FOLLOW;
-        this.followTarget = sender;
-        this.lastGoalChange = Date.now();
-        this.goalInterval = 60000;
-        this.queueChat('Okay, following you!', sender);
-      }
-      return;
-    }
-
-    if (lower.includes('stop') || lower.includes('stay') || lower.includes('wait')) {
+    const result = this.chatModule.handleIncoming(text, sender);
+    if (result.action === 'greet') {
+      this.currentGoal = Goals.GREET;
+      this.followTarget = result.target;
+      this.lastGoalChange = Date.now();
+      this.goalInterval = randomRange(5000, 15000);
+    } else if (result.action === 'follow') {
+      this.currentGoal = Goals.FOLLOW;
+      this.followTarget = result.target;
+      this.lastGoalChange = Date.now();
+      this.goalInterval = 60000;
+    } else if (result.action === 'stop') {
       this.movement.stopFollowing();
       this.movement.stop();
       this.currentGoal = Goals.IDLE;
       this.followTarget = null;
       this.lastGoalChange = Date.now();
-      this.queueChat('Okay, stopping.', sender);
-      return;
-    }
-
-    if (lower.includes('bye') || lower.includes('goodbye') || lower.includes('see you')) {
-      this.queueChat(Personality.getResponse('bye'), sender);
-      return;
-    }
-
-    if (lower.includes('thank')) {
-      this.queueChat(Personality.getResponse('thanks'), sender);
-      return;
-    }
-
-    if (Math.random() < 0.3 && Personality.shouldRespond()) {
-      const response = Personality.getResponse('default');
-      this.queueChat(response, sender);
+      this.chatModule.enqueue('Okay, stopping.', sender);
+    } else if (result.action === 'respond') {
+      this.currentGoal = Goals.RESPOND;
+      this.lastGoalChange = Date.now();
+      this.goalInterval = randomRange(2000, 5000);
     }
   }
 
-  queueChat(text, recipient = null) {
-    let message = text;
-    if (recipient) {
-      message = `/tell ${recipient} ${text}`;
-    }
-    this.chatQueue.push({ text: message, timestamp: Date.now() });
+  maybeSpontaneous() {
+    const now = Date.now();
+    if (now - this.lastSpontaneousCheck < this.spontaneousCheckInterval) return;
+    this.lastSpontaneousCheck = now;
+    this.chatModule.maybeSpontaneousComment();
   }
 
   getStatus() {
     return {
       currentGoal: this.currentGoal,
       followTarget: this.followTarget,
-      chatQueueLength: this.chatQueue.length,
-      isProcessingChat: this.isProcessingChat,
+      chatQueueLength: this.chatModule.getQueueLength(),
+      chatBusy: this.chatModule.isBusy(),
       lastGoalChange: this.lastGoalChange,
     };
   }

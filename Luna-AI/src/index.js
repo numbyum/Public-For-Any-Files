@@ -1,23 +1,16 @@
 require('dotenv').config();
 
 const mineflayer = require('mineflayer');
+const { Vec3 } = require('mineflayer');
 const Brain = require('./brain/Brain');
 const Perception = require('./perception/Perception');
 const Movement = require('./movement/Movement');
 const LookController = require('./movement/LookController');
 const Memory = require('./memory/Memory');
+const Config = require('./utils/Config');
 
-const config = {
-  host: process.env.MINECRAFT_HOST || 'localhost',
-  port: parseInt(process.env.MINECRAFT_PORT || '25565', 10),
-  version: process.env.MINECRAFT_VERSION || undefined,
-  username: process.env.MINECRAFT_USERNAME || 'Luna',
-  auth: process.env.MINECRAFT_AUTH || 'offline',
-  autonomous: process.env.LUNA_AUTONOMOUS !== 'false',
-  chat: process.env.LUNA_CHAT !== 'false',
-  memory: process.env.LUNA_MEMORY !== 'false',
-  logLevel: process.env.LUNA_LOG_LEVEL || 'info',
-};
+const config = Config.luna;
+const mcConfig = Config.minecraft;
 
 const LOG_PREFIXES = {
   info: ['[LUNA]'],
@@ -36,7 +29,8 @@ function log(prefix, level, ...args) {
   const needed = levels[level] !== undefined ? levels[level] : 2;
   if (needed > current) return;
   const tags = LOG_PREFIXES[prefix] || ['[LUNA]'];
-  console.log(`${tags.join('')} ${args.join(' ')}`);
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+  console.log(`${tags.join('')} ${time} ${args.join(' ')}`);
 }
 
 let bot = null;
@@ -46,16 +40,43 @@ let movement = null;
 let lookController = null;
 let mainLoop = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_DELAY = 30000;
-const BASE_RECONNECT_DELAY = 3000;
 let isShuttingDown = false;
 let consecutiveFailures = 0;
+let lastLookUpdate = 0;
 
 function createModules() {
   lookController = new LookController();
   perception = new Perception(bot);
   movement = new Movement(bot);
-  brain = new Brain(bot, perception, movement, lookController);
+  brain = new Brain(bot, perception, movement, lookController, config);
+}
+
+function yawPitchToVec3(yaw, pitch, origin, distance) {
+  const yawRad = (yaw * Math.PI) / 180;
+  const pitchRad = (pitch * Math.PI) / 180;
+  const x = origin.x + (-Math.sin(yawRad) * Math.cos(pitchRad)) * distance;
+  const y = origin.y + Math.sin(pitchRad) * distance;
+  const z = origin.z + (Math.cos(yawRad) * Math.cos(pitchRad)) * distance;
+  return new Vec3(x, y, z);
+}
+
+function applyLook() {
+  if (!bot || !bot.entity || !lookController) return;
+  const now = Date.now();
+  if (now - lastLookUpdate < 50) return;
+  lastLookUpdate = now;
+
+  const look = lookController.getCurrentLook();
+  if (!Number.isFinite(look.yaw) || !Number.isFinite(look.pitch)) return;
+
+  const target = yawPitchToVec3(look.yaw, look.pitch, bot.entity.position, config.lookDistance);
+  try {
+    bot.lookAt(target);
+  } catch (e) {
+    if (config.logLevel === 'debug') {
+      log('error', 'debug', 'lookAt failed:', e.message);
+    }
+  }
 }
 
 function startMainLoop() {
@@ -65,36 +86,35 @@ function startMainLoop() {
     if (isShuttingDown) return;
     try {
       brain.update();
-      lookController.update(50);
-      const look = lookController.getCurrentLook();
-      if (Number.isFinite(look.yaw) && Number.isFinite(look.pitch)) {
-        bot.look(look.yaw, look.pitch);
-      }
+      applyLook();
       movement.update(50, lookController);
     } catch (err) {
       log('error', 'error', 'Main loop error:', err.message);
+      if (config.logLevel === 'debug') {
+        console.error(err);
+      }
     }
   }, 50);
 }
 
-async function connect() {
+function connect() {
   if (isShuttingDown) return;
-  log('connect', 'info', `Connecting to ${config.host}:${config.port}...`);
-  if (config.version) {
-    log('connect', 'info', `Minecraft version: ${config.version}`);
+  log('connect', 'info', `Connecting to ${mcConfig.host}:${mcConfig.port}...`);
+  if (mcConfig.version) {
+    log('connect', 'info', `Minecraft version: ${mcConfig.version}`);
   } else {
     log('connect', 'info', 'Minecraft version: auto-detect');
   }
 
   try {
     const botOptions = {
-      host: config.host,
-      port: config.port,
-      username: config.username,
-      auth: config.auth,
+      host: mcConfig.host,
+      port: mcConfig.port,
+      username: mcConfig.username,
+      auth: mcConfig.auth,
     };
-    if (config.version) {
-      botOptions.version = config.version;
+    if (mcConfig.version) {
+      botOptions.version = mcConfig.version;
     }
 
     bot = mineflayer.createBot(botOptions);
@@ -110,8 +130,8 @@ async function connect() {
         movement.pickWanderTarget();
       }
       if (lookController) {
-        lookController.currentYaw = randomRange(0, 360);
-        lookController.currentPitch = randomRange(-20, 20);
+        lookController.currentYaw = Math.random() * 360;
+        lookController.currentPitch = (Math.random() - 0.5) * 40;
       }
     });
 
@@ -206,7 +226,10 @@ function cleanup() {
 
 function scheduleReconnect() {
   if (isShuttingDown) return;
-  const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY);
+  const delay = Math.min(
+    config.reconnectBaseDelay * Math.pow(1.5, reconnectAttempts),
+    config.reconnectMaxDelay
+  );
   reconnectAttempts++;
   log('connect', 'warn', `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`);
   setTimeout(() => {
@@ -237,6 +260,6 @@ if (config.memory) {
 
 connect();
 
-log('connect', 'info', `Luna AI starting... (${config.username})`);
-log('connect', 'info', `Target: ${config.host}:${config.port}`);
+log('connect', 'info', `Luna AI starting... (${mcConfig.username})`);
+log('connect', 'info', `Target: ${mcConfig.host}:${mcConfig.port}`);
 log('connect', 'info', 'Press Ctrl+C to stop.');

@@ -1,4 +1,5 @@
 const { randomRange, randomInt, clamp, lerp } = require('../utils/math');
+const Safety = require('../utils/Safety');
 
 class Movement {
   constructor(bot) {
@@ -31,9 +32,16 @@ class Movement {
   }
 
   setTarget(position) {
-    this.targetPosition = { x: position.x, y: position.y, z: position.z };
+    let x = position.x;
+    let z = position.z;
+    if (!Safety.isPositionSafe(this.bot, x, this.bot.entity.position.y, z)) {
+      const safe = Safety.getSafePositionNearby(this.bot, x, z);
+      x = safe.x;
+      z = safe.z;
+    }
+    this.targetPosition = { x, y: position.y, z };
     this.followTarget = null;
-    this.wanderYaw = this.calculateYawTo(position);
+    this.wanderYaw = this.calculateYawTo(this.targetPosition);
     this.isMoving = true;
     this.moveDuration = randomRange(3000, 8000);
     this.moveTimer = 0;
@@ -161,6 +169,10 @@ class Movement {
     );
 
     if (dist > this.followDistance + 1.5) {
+      if (!Safety.isPositionSafe(this.bot, targetPos.x, targetPos.y, targetPos.z)) {
+        this.stop();
+        return;
+      }
       this.isMoving = true;
       this.moveDuration = 10000;
       this.moveTimer = 0;
@@ -192,6 +204,12 @@ class Movement {
     if (!this.bot.entity || !this.targetPosition) return;
     const myPos = this.bot.entity.position;
     const target = this.targetPosition;
+
+    if (!Safety.isPositionSafe(this.bot, target.x, target.y, target.z)) {
+      this.pickWanderTarget();
+      return;
+    }
+
     const dist = Math.sqrt(
       (target.x - myPos.x) ** 2 +
       (target.z - myPos.z) ** 2
@@ -297,12 +315,19 @@ class Movement {
   pickWanderTarget() {
     if (!this.bot.entity) return;
     const pos = this.bot.entity.position;
-    const angle = randomRange(0, Math.PI * 2);
-    const dist = randomRange(5, 15);
+    let angle = randomRange(0, Math.PI * 2);
+    let dist = randomRange(5, 15);
+    let x = pos.x + Math.cos(angle) * dist;
+    let z = pos.z + Math.sin(angle) * dist;
+    if (!Safety.isPositionSafe(this.bot, x, pos.y, z)) {
+      const safe = Safety.getSafePositionNearby(this.bot, x, z);
+      x = safe.x;
+      z = safe.z;
+    }
     this.targetPosition = {
-      x: pos.x + Math.cos(angle) * dist,
+      x,
       y: pos.y,
-      z: pos.z + Math.sin(angle) * dist,
+      z,
     };
     this.wanderYaw = this.calculateYawTo(this.targetPosition);
     this.isMoving = true;

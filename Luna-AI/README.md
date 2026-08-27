@@ -19,24 +19,28 @@ Luna is an autonomous Minecraft AI player. She connects to a Minecraft server (l
 ```
 Luna-AI/
 ├── README.md
+├── CHANGELOG.md
+├── LICENSE
 ├── package.json
 ├── .env.example
 ├── .gitignore
 ├── src/
 │   ├── index.js              (main entry point)
+│   ├── utils/
+│   │   ├── math.js           (smooth math and easing helpers)
+│   │   └── Config.js         (centralized configuration)
 │   ├── brain/
 │   │   ├── Brain.js          (decision making and goals)
 │   │   ├── Personality.js    (Luna's identity and chat style)
-│   │   └── Goals.js          (goal definitions and transitions)
+│   │   ├── Goals.js          (goal definitions and transitions)
+│   │   └── ChatModule.js     (chat message queue and handling)
 │   ├── memory/
 │   │   └── Memory.js         (persistent JSON memory)
 │   ├── perception/
 │   │   └── Perception.js     (world, players, entities, chat)
-│   ├── movement/
-│   │   ├── Movement.js       (smooth walking and wandering)
-│   │   └── LookController.js (smooth camera / look control)
-│   └── utils/
-│       └── math.js           (smooth math and easing helpers)
+│   └── movement/
+│       ├── Movement.js       (smooth walking and wandering)
+│       └── LookController.js (smooth camera / look control)
 └── data/
     └── memory.json           (auto-created on first run)
 ```
@@ -88,7 +92,7 @@ You can copy the contents of `.env.example` into it and edit the values.
 Edit these values in `.env`:
 
 ```
-MINECRAFT_HOST=your-server-address.example.com
+MINECRAFT_HOST=your-server-host
 MINECRAFT_PORT=25565
 MINECRAFT_VERSION=
 MINECRAFT_USERNAME=Luna
@@ -101,6 +105,20 @@ MINECRAFT_AUTH=offline
 - **MINECRAFT_USERNAME**: The name Luna will use in-game (for example `Luna`)
 - **MINECRAFT_AUTH**: Use `offline` if the server does not require a paid Minecraft account. Use `microsoft` if it does.
 
+### Optional tuning variables
+
+You can also add these to `.env` to adjust Luna's behavior:
+
+```
+LUNA_AUTONOMOUS=true
+LUNA_CHAT=true
+LUNA_MEMORY=true
+LUNA_LOG_LEVEL=info
+LUNA_RECONNECT_BASE_DELAY=3000
+LUNA_RECONNECT_MAX_DELAY=30000
+LUNA_LOOK_DISTANCE=10
+```
+
 ### 5. Run Luna
 
 Type this command and press Enter:
@@ -112,10 +130,10 @@ npm start
 You should see logs like:
 
 ```
-[CONNECT] Luna AI starting... (Luna)
-[CONNECT] Target: your-server:25565
-[CONNECT] Connecting to your-server:25565...
-[CONNECT] Spawned into the world.
+[CONNECT] 14:01:07 Luna AI starting... (Luna)
+[CONNECT] 14:01:07 Target: your-server:25565
+[CONNECT] 14:01:07 Connecting to your-server:25565...
+[CONNECT] 14:01:08 Spawned into the world.
 ```
 
 If you see "Spawned into the world", Luna is online.
@@ -193,14 +211,16 @@ Memory is stored locally in `data/memory.json`. Later, this can be upgraded to S
 ## Project structure explained
 
 - `src/index.js` - Starts the bot, connects, reconnects, runs the main loop.
+- `src/utils/Config.js` - Reads `.env` and provides typed configuration.
+- `src/utils/math.js` - Smooth interpolation and random helpers.
 - `src/brain/Brain.js` - Decides what Luna should do right now.
 - `src/brain/Goals.js` - Defines possible goals like wander, observe, greet, follow.
 - `src/brain/Personality.js` - Luna's identity, chat style, and responses.
+- `src/brain/ChatModule.js` - Queues and sends chat messages with delays.
 - `src/memory/Memory.js` - Loads and saves player and event data.
 - `src/perception/Perception.js` - Detects nearby players, entities, and chat.
 - `src/movement/Movement.js` - Controls walking, sprinting, pausing, and following with natural timing.
 - `src/movement/LookController.js` - Controls camera smoothly with overshoot, idle movements, and variable turn speed.
-- `src/utils/math.js` - Smooth interpolation and random helpers.
 
 ## Upgrading later
 
@@ -217,3 +237,7 @@ The code is modular. You can later add:
 Current: **0.1.0**
 
 This is a first version focused on reliable connection, natural movement, basic chat, and memory. It is not a fully intelligent AGI. It simulates personality and behavior through modular code.
+
+## License
+
+MIT License - see the [LICENSE](LICENSE) file for details.
